@@ -125,11 +125,16 @@ optimizer = optim.AdamW(model.parameters(), lr=1e-4)
 
 # Training
 epochs = 20
-history = {'train_loss': [], 'val_iou': []}
+train_loss_history = []  # Added to track training loss 
+val_loss_history = []    # Added to track validation loss [cite: 714, 716]
+train_iou_history = []   # Added to track training IoU [cite: 714, 716]
+val_iou_history = []     # Added to track validation IoU [cite: 715, 716]
 
 for epoch in range(epochs):
     model.train()
     train_loader, val_loader = prepare_dataloaders("./train/imgs", "./train/masks")
+    running_loss = 0.0 # Track total loss for the epoch [cite: 720]
+    running_iou = 0.0  # Track total IoU for the epoch [cite: 721]
     
     for images, masks in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
         images, masks = images.to(device), masks.to(device)
@@ -139,17 +144,33 @@ for epoch in range(epochs):
         loss.backward()
         optimizer.step()
         
-    # Validation [cite: 751]
+        running_loss += loss.item() # Accumulate loss [cite: 735]
+        running_iou += calculate_iou(outputs, masks, num_classes) # Accumulate IoU [cite: 738, 739]
+
+    # Calculate and store epoch averages [cite: 741, 742, 743, 744]
+    train_loss_history.append(running_loss / len(train_loader))
+    train_iou_history.append(running_iou / len(train_loader))
+        
+    # Validation [cite: 750]
     model.eval()
-    ious = []
+    val_running_loss = 0.0 # Added to track validation loss [cite: 752]
+    val_running_iou = 0.0  # Added to track validation IoU [cite: 754]
+    
     with torch.no_grad():
         for images, masks in val_loader:
             images, masks = images.to(device), masks.to(device)
             outputs = model(images)
-            ious.append(calculate_iou(outputs, masks, num_classes))
+            
+            # Calculate metrics for the validation batch [cite: 759, 762]
+            loss = criterion(outputs, masks)
+            val_running_loss += loss.item()
+            val_running_iou += calculate_iou(outputs, masks, num_classes)
     
-    print(f"Mean IoU: {np.mean(ious):.4f}")
-    history['val_iou'].append(np.mean(ious))
+    # Calculate and store validation averages [cite: 765, 766, 767, 768]
+    val_loss_history.append(val_running_loss / len(val_loader))
+    val_iou_history.append(val_running_iou / len(val_loader))
+    
+    print(f"Mean IoU: {val_iou_history[-1]:.4f}")
 
 # Save weights [cite: 777]
 torch.save(model.state_dict(), "best_model.pth")
