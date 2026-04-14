@@ -10,6 +10,8 @@ from torchvision import transforms, models
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from torchsummary import summary
+import torchvision.transforms.functional as TF
+import random
 
 class AugmentedSegmentationDataset(Dataset):
     def __init__(self, image_dir, mask_dir, transform=None, augment_factor=1, augment_transform=None):
@@ -35,18 +37,28 @@ class AugmentedSegmentationDataset(Dataset):
         
         # Determine if this is an augmented sample
         is_augmented = idx % (1 + self.augment_factor) != 0
+        if is_augmented:
+            # Synchronized Horizontal Flip: Apply to BOTH if random check passes
+            if random.random() > 0.5:
+                image = TF.hflip(image)
+                mask = TF.hflip(mask)
         
-        if is_augmented and self.augment_transform:
-            # Note: For segmentation, augmentation must apply to BOTH img and mask
-            # Simplified here for clarity; libraries like Albumentations are better for this
-            image = self.augment_transform(image)
-        elif self.transform:
-            image = self.transform(image)
-            
-        mask = torch.tensor(mask, dtype=torch.long)
+        # 1. Resize: Must use NEAREST for mask to keep integer labels (0-15)
+        image = TF.resize(image, (256, 256))
+        mask = TF.resize(mask, (256, 256), interpolation=TF.InterpolationMode.NEAREST)
+
+        # 2. Convert to Tensor: Scaled to [0, 1] for image
+        image = TF.to_tensor(image)
+        
+        # 3. Normalize Image: Using standard ImageNet parameters
+        image = TF.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        # 4. Final Mask Conversion: Convert to LongTensor for CrossEntropyLoss
+        mask = torch.from_numpy(np.array(mask)).long()
+
         return image, mask
 
-def prepare_dataloaders(image_dir, mask_dir, batch_size=16, val_ratio=0.2):
+def prepare_dataloaders(image_dir, mask_dir, batch_size=4, val_ratio=0.2):
     transform = transforms.Compose([
         transforms.ToPILImage(),
         transforms.Resize((256, 256)),
@@ -72,13 +84,23 @@ class SimpleUNet(nn.Module):
         
         # Decoder [cite: 612]
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, num_classes, kernel_size=1)
+        # Stage 1: 8x8 -> 16x16
+        nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Stage 2: 16x16 -> 32x32
+        nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Stage 3: 32x32 -> 64x64
+        nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Stage 4: 64x64 -> 128x128 (Added)
+        nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Stage 5: 128x128 -> 256x256 (Added)
+        nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Final layer to match num_classes
+        nn.Conv2d(16, num_classes, kernel_size=1)
         )
 
     def forward(self, x):
@@ -124,7 +146,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.AdamW(model.parameters(), lr=1e-4)
 
 # Training
-epochs = 20
+epochs = 5
 train_loss_history = []  # Added to track training loss 
 val_loss_history = []    # Added to track validation loss [cite: 714, 716]
 train_iou_history = []   # Added to track training IoU [cite: 714, 716]
