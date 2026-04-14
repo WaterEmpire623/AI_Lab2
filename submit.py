@@ -11,7 +11,7 @@ def rle_encode(mask):
     return ' '.join(str(x) for x in runs)
 
 # 資料夾和輸出的csv存放路徑
-mask_dir = "./test_data"
+mask_dir = "./UAV_dataset/test/masks"
 output_csv = "sample_submission.csv"
 num_classes = 16       # 0~15 類別
 

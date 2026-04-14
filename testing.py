@@ -19,40 +19,31 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class SimpleUNet(nn.Module):
     def __init__(self, num_classes):
         super(SimpleUNet, self).__init__()
-        # Encoder: Pretrained ResNet18 [cite: 608]
         resnet = models.resnet18(pretrained=True)
         self.encoder = nn.Sequential(*list(resnet.children())[:-2]) 
         
-        # Decoder [cite: 612]
         self.decoder = nn.Sequential(
-        # Stage 1: 8x8 -> 16x16
-        nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Stage 2: 16x16 -> 32x32
-        nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Stage 3: 32x32 -> 64x64
-        nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Stage 4: 64x64 -> 128x128 (Added)
-        nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Stage 5: 128x128 -> 256x256 (Added)
-        nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Final layer to match num_classes
-        nn.Conv2d(16, num_classes, kernel_size=1)
+            nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, num_classes, kernel_size=1)
         )
 
     def forward(self, x):
         x = self.encoder(x)
         x = self.decoder(x)
-        # Resize back to original UAV image size (600, 800) [cite: 635]
-        return nn.functional.interpolate(x, size=(600, 800), mode="bilinear")
+        return nn.functional.interpolate(x, size=(256, 256), mode="bilinear")
     
 # Path settings
-test_img_dir = "./UAV/dataset/test/imgs" # Path to your 1000 test images
-output_dir = "./UAV/dataset/test/masks"     # Where to save the created masks
+test_img_dir = "./UAV_dataset/test/imgs" # Path to your 1000 test images
+output_dir = "./UAV_dataset/test/masks"     # Where to save the created masks
 os.makedirs(output_dir, exist_ok=True)
 
 # 1. Load Model

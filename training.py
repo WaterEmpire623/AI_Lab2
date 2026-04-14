@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from torchsummary import summary
 import torchvision.transforms.functional as TF
 import random
+from PIL import Image
 
 class AugmentedSegmentationDataset(Dataset):
     def __init__(self, image_dir, mask_dir, transform=None, augment_factor=1, augment_transform=None):
@@ -31,29 +32,32 @@ class AugmentedSegmentationDataset(Dataset):
         img_path = os.path.join(self.image_dir, self.images[image_idx])
         mask_path = os.path.join(self.mask_dir, self.masks[image_idx])
 
+        # 1. Load data as NumPy arrays
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mask = cv2.imread(mask_path, 0) # Load as grayscale (0-15) [cite: 14]
+        mask = cv2.imread(mask_path, 0) # Grayscale
+
+        # 2. FIX: Convert NumPy arrays to PIL Images so TF.resize/TF.hflip works
+        image = Image.fromarray(image)
+        mask = Image.fromarray(mask)
         
         # Determine if this is an augmented sample
         is_augmented = idx % (1 + self.augment_factor) != 0
         if is_augmented:
-            # Synchronized Horizontal Flip: Apply to BOTH if random check passes
+            # Synchronized Horizontal Flip
             if random.random() > 0.5:
                 image = TF.hflip(image)
                 mask = TF.hflip(mask)
         
-        # 1. Resize: Must use NEAREST for mask to keep integer labels (0-15)
+        # 3. Resize: Now works because inputs are PIL Images
         image = TF.resize(image, (256, 256))
         mask = TF.resize(mask, (256, 256), interpolation=TF.InterpolationMode.NEAREST)
 
-        # 2. Convert to Tensor: Scaled to [0, 1] for image
+        # 4. Convert Image to Tensor and Normalize
         image = TF.to_tensor(image)
-        
-        # 3. Normalize Image: Using standard ImageNet parameters
         image = TF.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-        # 4. Final Mask Conversion: Convert to LongTensor for CrossEntropyLoss
+        # 5. Convert Mask to LongTensor for CrossEntropyLoss
         mask = torch.from_numpy(np.array(mask)).long()
 
         return image, mask
@@ -78,36 +82,27 @@ def prepare_dataloaders(image_dir, mask_dir, batch_size=4, val_ratio=0.2):
 class SimpleUNet(nn.Module):
     def __init__(self, num_classes):
         super(SimpleUNet, self).__init__()
-        # Encoder: Pretrained ResNet18 [cite: 608]
         resnet = models.resnet18(pretrained=True)
         self.encoder = nn.Sequential(*list(resnet.children())[:-2]) 
         
-        # Decoder [cite: 612]
         self.decoder = nn.Sequential(
-        # Stage 1: 8x8 -> 16x16
-        nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Stage 2: 16x16 -> 32x32
-        nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Stage 3: 32x32 -> 64x64
-        nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Stage 4: 64x64 -> 128x128 (Added)
-        nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Stage 5: 128x128 -> 256x256 (Added)
-        nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
-        nn.ReLU(inplace=True),
-        # Final layer to match num_classes
-        nn.Conv2d(16, num_classes, kernel_size=1)
+            nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, num_classes, kernel_size=1)
         )
 
     def forward(self, x):
         x = self.encoder(x)
         x = self.decoder(x)
-        # Resize back to original UAV image size (600, 800) [cite: 635]
-        return nn.functional.interpolate(x, size=(600, 800), mode="bilinear")
+        return nn.functional.interpolate(x, size=(256, 256), mode="bilinear")
     
 class DiceLoss(nn.Module):
     def __init__(self, num_classes):
