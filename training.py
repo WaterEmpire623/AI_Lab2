@@ -154,7 +154,7 @@ val_iou_history = []     # Added to track validation IoU [cite: 715, 716]
 
 for epoch in range(epochs):
     model.train()
-    train_loader, val_loader = prepare_dataloaders("./train/imgs", "./train/masks")
+    train_loader, val_loader = prepare_dataloaders("./UAV_dataset/train/imgs", "./UAV_dataset/train/masks")
     running_loss = 0.0 # Track total loss for the epoch [cite: 720]
     running_iou = 0.0  # Track total IoU for the epoch [cite: 721]
     
