@@ -85,7 +85,7 @@ class AugmentedSegmentationDataset(Dataset):
 
         return image, mask
 
-def prepare_dataloaders(image_dir, mask_dir, batch_size=16, val_ratio=0.2):
+def prepare_dataloaders(image_dir, mask_dir, batch_size=32, val_ratio=0.2):
     transform = transforms.Compose([
         transforms.ToPILImage(),
         transforms.Resize((256, 256)),
@@ -171,7 +171,7 @@ model = smp.Unet(
 ).to(device)
 criterion = nn.CrossEntropyLoss() 
 optimizer = optim.AdamW(model.parameters(), lr=1e-4)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2, verbose=True)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
 
 # Training
 epochs = 20
