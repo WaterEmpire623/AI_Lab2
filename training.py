@@ -13,10 +13,9 @@ from torchsummary import summary
 import torchvision.transforms.functional as TF
 import random
 from PIL import Image
-import segmentation_models_pytorch as smp
 
 class AugmentedSegmentationDataset(Dataset):
-    def __init__(self, image_dir, mask_dir, transform=None, augment_factor=2, augment_transform=None):
+    def __init__(self, image_dir, mask_dir, transform=None, augment_factor=1, augment_transform=None):
         self.image_dir = image_dir
         self.mask_dir = mask_dir
         self.transform = transform
@@ -33,54 +32,32 @@ class AugmentedSegmentationDataset(Dataset):
         img_path = os.path.join(self.image_dir, self.images[image_idx])
         mask_path = os.path.join(self.mask_dir, self.masks[image_idx])
 
-        # 1. Load data as NumPy arrays
         image = cv2.imread(img_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mask = cv2.imread(mask_path, 0) # Grayscale
-
-        # 2. Convert NumPy arrays to PIL Images
-        image = Image.fromarray(image)
-        mask = Image.fromarray(mask)
+        mask = cv2.imread(mask_path, 0) # Load as grayscale (0-15) [cite: 14]
         
+        image = Image.fromarray(image).convert('RGB')
+        mask = Image.fromarray(mask)
+
         # Determine if this is an augmented sample
         is_augmented = idx % (1 + self.augment_factor) != 0
         if is_augmented:
-            # --- GEOMETRIC AUGMENTATIONS (Must apply to BOTH Image and Mask) ---
-            
-            # Synchronized Horizontal Flip
+            # Synchronized Horizontal Flip: Apply to BOTH if random check passes
             if random.random() > 0.5:
                 image = TF.hflip(image)
                 mask = TF.hflip(mask)
-
-            # NEW: Random Rotation (e.g., -15 to 15 degrees)
-            if random.random() > 0.5:
-                angle = random.uniform(-15, 15)
-                image = TF.rotate(image, angle)
-                # Use NEAREST interpolation for masks to avoid creating fake class values
-                mask = TF.rotate(mask, angle, interpolation=TF.InterpolationMode.NEAREST)
-
-            # --- PHOTOMETRIC AUGMENTATIONS (Apply to IMAGE ONLY) ---
-            
-            # NEW: Random Color/Contrast Jitter
-            if random.random() > 0.5:
-                # brightness, contrast, saturation, hue
-                color_jitter = transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1)
-                image = color_jitter(image)
-
-            # NEW: Random Gaussian Blur
-            if random.random() > 0.3:
-                # Using a small 3x3 kernel to simulate slight motion or focus blur
-                image = TF.gaussian_blur(image, kernel_size=(3, 3))
         
-        # 3. Resize
+        # 1. Resize: Must use NEAREST for mask to keep integer labels (0-15)
         image = TF.resize(image, (256, 256))
         mask = TF.resize(mask, (256, 256), interpolation=TF.InterpolationMode.NEAREST)
 
-        # 4. Convert Image to Tensor and Normalize
+        # 2. Convert to Tensor: Scaled to [0, 1] for image
         image = TF.to_tensor(image)
+        
+        # 3. Normalize Image: Using standard ImageNet parameters
         image = TF.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-        # 5. Convert Mask to LongTensor for CrossEntropyLoss
+        # 4. Final Mask Conversion: Convert to LongTensor for CrossEntropyLoss
         mask = torch.from_numpy(np.array(mask)).long()
 
         return image, mask
@@ -102,34 +79,40 @@ def prepare_dataloaders(image_dir, mask_dir, batch_size=32, val_ratio=0.2):
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
     return train_loader, val_loader
 
-
-'''
 class SimpleUNet(nn.Module):
     def __init__(self, num_classes):
         super(SimpleUNet, self).__init__()
+        # Encoder: Pretrained ResNet18 [cite: 608]
         resnet = models.resnet18(pretrained=True)
         self.encoder = nn.Sequential(*list(resnet.children())[:-2]) 
         
+        # Decoder [cite: 612]
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True),
-            nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(16, num_classes, kernel_size=1)
+        # Stage 1: 8x8 -> 16x16
+        nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Stage 2: 16x16 -> 32x32
+        nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Stage 3: 32x32 -> 64x64
+        nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Stage 4: 64x64 -> 128x128 (Added)
+        nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Stage 5: 128x128 -> 256x256 (Added)
+        nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2),
+        nn.ReLU(inplace=True),
+        # Final layer to match num_classes
+        nn.Conv2d(16, num_classes, kernel_size=1)
         )
 
     def forward(self, x):
         x = self.encoder(x)
         x = self.decoder(x)
+        # Change (600, 800) to (256, 256) to match your masks
         return nn.functional.interpolate(x, size=(256, 256), mode="bilinear")
-''' 
-
+    
 class DiceLoss(nn.Module):
     def __init__(self, num_classes):
         super(DiceLoss, self).__init__()
@@ -162,16 +145,9 @@ def calculate_iou(outputs, masks, num_classes):
 # Setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_classes = 16  # Based on HW2 spec 
-model = smp.Unet(
-    encoder_name="resnet34",        # Upgrade to ResNet-34
-    encoder_weights="imagenet",      # Use pre-trained weights
-    in_channels=3,                  # RGB input
-    classes=16,                     # Your 16 classes
-    activation=None                 # Raw logits for CrossEntropyLoss
-).to(device)
+model = SimpleUNet(num_classes).to(device)
 criterion = nn.CrossEntropyLoss() 
 optimizer = optim.AdamW(model.parameters(), lr=1e-4)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
 
 # Training
 epochs = 20
@@ -180,9 +156,9 @@ val_loss_history = []    # Added to track validation loss [cite: 714, 716]
 train_iou_history = []   # Added to track training IoU [cite: 714, 716]
 val_iou_history = []     # Added to track validation IoU [cite: 715, 716]
 
-train_loader, val_loader = prepare_dataloaders("./UAV_dataset/train/imgs", "./UAV_dataset/train/masks")
 for epoch in range(epochs):
     model.train()
+    train_loader, val_loader = prepare_dataloaders("./UAV_dataset/train/imgs", "./UAV_dataset/train/masks")
     running_loss = 0.0 # Track total loss for the epoch [cite: 720]
     running_iou = 0.0  # Track total IoU for the epoch [cite: 721]
     
@@ -219,7 +195,7 @@ for epoch in range(epochs):
     # Calculate and store validation averages [cite: 765, 766, 767, 768]
     val_loss_history.append(val_running_loss / len(val_loader))
     val_iou_history.append(val_running_iou / len(val_loader))
-    scheduler.step(val_iou_history[-1])
+    
     print(f"Mean IoU: {val_iou_history[-1]:.4f}")
 
 # Save weights [cite: 777]
